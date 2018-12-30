@@ -22,7 +22,7 @@ description:         Please see the README on GitHub at <https://github.com/wiza
 dependencies:
 - base >= 4.7 && < 5
 - random >= 1.1
-- time >= 1.9.2
+- time >= 1.8.0.2
 
 library:
   source-dirs: src

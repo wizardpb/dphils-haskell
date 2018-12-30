@@ -3,10 +3,12 @@ module Main where
 import Control.Concurrent
 import Control.Concurrent.Chan
 import Philosopher
+import Logger
 
 main :: IO ()
 main = do
   channels <- mapM (\_ -> newChan) philosophers
+  (logId, logger) <- startLogger
 
   let
     idPhilosophers = map runPhilosopher philIds
@@ -16,7 +18,7 @@ main = do
     initialStates = map initialState philIds
     philFuncs = zipWith ($) ioPhilosophers initialStates
 
-  threadIds <- mapM forkIO philFuncs
+  threadIds <- mapM (\pf -> forkIO $ pf logger) philFuncs
 
   mapM startPhil channels
 

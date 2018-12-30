@@ -38,7 +38,7 @@ initialFork forkId =
 initialThreadState leftFork rightFork = ThreadState {
     state = Starting,
     left = ForkRecord { fork = leftFork, canRequest = isNothing leftFork},
-    right = ForkRecord { fork = rightFork, canRequest = isNothing leftFork}
+    right = ForkRecord { fork = rightFork, canRequest = isNothing rightFork}
   }
 
 nextForkId forkId = mod (forkId + 1) philCount
@@ -48,27 +48,27 @@ initialState philId
   | philId == 1 = initialThreadState Nothing Nothing
   | otherwise = initialThreadState (initialFork philId) Nothing
 
-nextState philId name state @ ThreadState { state = philState, left = left, right = right} inCh = do
-  msg <- readChan inCh
-  delay <- nextDelay
-  case msg of
-      NextState Thinking -> do
-        sendNextState delay Hungry inCh
-        putStrLn $ name ++ " is thinking..."
-        return state { state = Thinking }
-      NextState Hungry -> do
-        putStrLn $ name ++ " is hungry..."
-        return state { state = Hungry }
-      RequestToken n ->
-        return $
-          if n == philId
-          then state { left = left { canRequest = True} }
-          else state { right = right { canRequest = True} }
-      XmitFork (Fork n s) ->
-        return $
-          if n == philId
-          then state { left = left { fork = Just (Fork n s)} }
-          else state { right = right { fork = Just (Fork n s)} }
+--nextState philId name state @ ThreadState { state = philState, left = left, right = right} inCh = do
+--  msg <- readChan inCh
+--  delay <- nextDelay
+--  case msg of
+--      NextState Thinking -> do
+--        sendNextState delay Hungry inCh
+--        putStrLn $ name ++ " is thinking..."
+--        return state { state = Thinking }
+--      NextState Hungry -> do
+--        putStrLn $ name ++ " is hungry..."
+--        return state { state = Hungry }
+--      RequestToken n ->
+--        return $
+--          if n == philId
+--          then state { left = left { canRequest = True} }
+--          else state { right = right { canRequest = True} }
+--      XmitFork (Fork n s) ->
+--        return $
+--          if n == philId
+--          then state { left = left { fork = Just (Fork n s)} }
+--          else state { right = right { fork = Just (Fork n s)} }
 
 
 requestFork forkId outCh = do
@@ -93,48 +93,108 @@ forkId ForkRecord { fork = f, canRequest = _} =
     Just (Fork n s) -> n
     Nothing -> error "Getting id non-existent fork"
 
-actState philId name state @ ThreadState { state = philState, left = left, right = right } leftCh inCh rightCh
-  | philState == Hungry && canRequest left && (not $ hasFork left) =
-      do
-        -- Request left fork
-        let forkId = philId
-        requestFork forkId leftCh
-        return state { left = left {canRequest = False} }
-  | philState == Hungry && canRequest right && (not $ hasFork right) =
-      do
-        -- Request right fork
-        let forkId = nextForkId philId
-        requestFork forkId rightCh
-        return state { right = right { canRequest = False} }
-  | philState == Hungry && hasFork left && hasFork right =
-      do
-        -- Start eating!
+--actState philId name state @ ThreadState { state = philState, left = left, right = right } leftCh inCh rightCh
+--  | philState == Hungry && canRequest left && (not $ hasFork left) =
+--      do
+--        -- Request left fork
+--        let forkId = philId
+--        requestFork forkId leftCh
+--        return state { left = left {canRequest = False} }
+--  | philState == Hungry && canRequest right && (not $ hasFork right) =
+--      do
+--        -- Request right fork
+--        let forkId = nextForkId philId
+--        requestFork forkId rightCh
+--        return state { right = right { canRequest = False} }
+--  | philState == Hungry && hasFork left && hasFork right =
+--      do
+--        -- Start eating!
+--        delay <- nextDelay
+--        sendNextState delay Thinking inCh
+--        putStrLn $ name ++ " is eating!"
+--        return state {
+--          state = Eating,
+--          left = left { fork = Just (Fork philId Dirty)}, right = right { fork = Just (Fork (nextForkId philId) Dirty)}
+--        }
+--  | philState /= Eating && hasFork left && canRequest left && dirty left =
+--      do
+--        let f = fork left
+--        sendFork f leftCh
+--        return state { left = left { fork = Nothing } }
+--  | philState /= Eating && hasFork right && canRequest right && dirty right =
+--      do
+--        let f = fork right
+--        sendFork f rightCh
+--        return state { right = right { fork = Nothing}}
+--  | otherwise = return state
+
+
+runPhilosopher :: Int -> String -> (Chan Message, Chan Message, Chan Message) -> ThreadState -> (Int -> String -> IO ()) -> IO ()
+runPhilosopher philId name (leftCh, inCh, rightCh) state logger = do
+  let nextState state @ ThreadState { state = philState, left = left, right = right} = do
+        msg <- readChan inCh
         delay <- nextDelay
-        sendNextState delay Thinking inCh
-        putStrLn $ name ++ " is eating!"
-        return state {
-          state = Eating,
-          left = left { fork = Just (Fork philId Dirty)}, right = right { fork = Just (Fork (nextForkId philId) Dirty)}
-        }
-  | philState /= Eating && hasFork left && canRequest left && dirty left =
-      do
-        let f = fork left
-        sendFork f leftCh
-        return state { left = left { fork = Nothing } }
-  | philState /= Eating && hasFork right && canRequest right && dirty right =
-      do
-        let f = fork right
-        sendFork f rightCh
-        return state { right = right { fork = Nothing}}
-  | otherwise = return state
+        case msg of
+            NextState Thinking -> do
+              sendNextState delay Hungry inCh
+              logger philId $ name ++ " is thinking..."
+              return state { state = Thinking }
+            NextState Hungry -> do
+              logger philId $ name ++ " is hungry..."
+              return state { state = Hungry }
+            RequestToken n ->
+              return $
+                if n == philId
+                then state { left = left { canRequest = True} }
+                else state { right = right { canRequest = True} }
+            XmitFork (Fork n s) ->
+              return $
+                if n == philId
+                then state { left = left { fork = Just (Fork n s)} }
+                else state { right = right { fork = Just (Fork n s)} }
 
+      actState state @ ThreadState { state = philState, left = left, right = right }
+        | philState == Hungry && canRequest left && (not $ hasFork left) =
+            do
+              -- Request left fork
+              let forkId = philId
+              requestFork forkId leftCh
+              return state { left = left {canRequest = False} }
+        | philState == Hungry && canRequest right && (not $ hasFork right) =
+            do
+              -- Request right fork
+              let forkId = nextForkId philId
+              requestFork forkId rightCh
+              return state { right = right { canRequest = False} }
+        | philState == Hungry && hasFork left && hasFork right =
+            do
+              -- Start eating!
+              delay <- nextDelay
+              sendNextState delay Thinking inCh
+              logger philId $ name ++ " is eating!"
+              return state {
+                state = Eating,
+                left = left { fork = Just (Fork philId Dirty)}, right = right { fork = Just (Fork (nextForkId philId) Dirty)}
+              }
+        | philState /= Eating && hasFork left && canRequest left && dirty left =
+            do
+              let f = fork left
+              sendFork f leftCh
+              return state { left = left { fork = Nothing } }
+        | philState /= Eating && hasFork right && canRequest right && dirty right =
+            do
+              let f = fork right
+              sendFork f rightCh
+              return state { right = right { fork = Nothing}}
+        | otherwise = return state
 
-runPhilosopher :: Int -> String -> (Chan Message, Chan Message, Chan Message) -> ThreadState -> IO ()
-runPhilosopher philId name (leftCh, inCh, rightCh) state = do
-  ns <- nextState philId name state inCh
---  putStrLn (name ++ ": nextState=" ++ (show ns))
-  as <- actState philId name ns leftCh inCh rightCh
---  putStrLn (name ++ ": act state=" ++ (show as))
-  runPhilosopher philId name (leftCh, inCh, rightCh) as
+      recurse state = do
+--        logger philId $ name ++ ": state=" ++ (show state)
+        ns <- nextState state
+--        logger philId $ name ++ ": ns=" ++ (show ns)
+        as <- actState ns
+        recurse as
+
+  recurse state
 
 startPhil ch = writeChan ch $ NextState Thinking
