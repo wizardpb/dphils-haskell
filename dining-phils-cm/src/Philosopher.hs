@@ -16,7 +16,7 @@ data Fork = Fork Int ForkState deriving (Eq, Show)
 data ForkRecord = ForkRecord { fork :: Maybe Fork, canRequest :: Bool} deriving (Eq, Show)
 data ThreadState = ThreadState {
     state :: PhilState,
-    eatCount :: Int,
+    eatCount :: Int, eatTime :: Int,
     left :: ForkRecord, right :: ForkRecord
   }
   deriving (Eq, Show)
@@ -42,7 +42,7 @@ initialFork forkId =
 initialThreadState :: Maybe Fork -> Maybe Fork -> ThreadState
 initialThreadState leftFork rightFork = ThreadState {
     state = Starting,
-    eatCount = 0,
+    eatCount = 0, eatTime = 0,
     left = ForkRecord { fork = leftFork, canRequest = isNothing leftFork},
     right = ForkRecord { fork = rightFork, canRequest = isNothing rightFork}
   }
@@ -90,7 +90,10 @@ forkId forkRecord =
 
 logState :: LogFunc -> Int -> String -> ThreadState -> IO ()
 logState logFunc philId name s = do
-  let stateStr = name ++ " is " ++ (show $ state s) ++ ", has eaten " ++ (show $ eatCount s) ++ " times"
+  let
+    stateStr = name ++ " is " ++ (show $ state s) ++
+               ", has eaten " ++ (show $ eatCount s) ++ " times, " ++
+               (show $ eatTime s) ++ " seconds total"
   logFunc philId stateStr
 
 runPhilosopher :: Int -> String -> (Chan Message, Chan Message, Chan Message) -> ThreadState -> LogFunc -> IO ()
@@ -133,9 +136,9 @@ runPhilosopher philId name (leftCh, inCh, rightCh) state logFunc = do
               -- Start eating!
               delay <- nextDelay
               sendNextState delay Thinking inCh
-              let incCount  = (eatCount state) + 1
               return state {
-                state = Eating, eatCount = incCount,
+                state = Eating,
+                eatCount = (eatCount state) + 1, eatTime = (eatTime state) + delay,
                 left = left { fork = Just (Fork philId Dirty)}, right = right { fork = Just (Fork (nextForkId philId) Dirty)}
               }
         | philState /= Eating && hasFork left && forkRequested left && dirty left =
