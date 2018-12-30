@@ -25,7 +25,7 @@ philCount = length philosophers
 philIds = [0..philCount-1]
 
 nextDelay :: IO Int
-nextDelay = randomRIO (1,30)
+nextDelay = randomRIO (5,30)
 
 sendNextState :: Int -> PhilState -> Chan Message -> IO ThreadId
 sendNextState secs nextState ch = forkIO $ do
@@ -44,7 +44,7 @@ initialThreadState leftFork rightFork = ThreadState {
 nextForkId forkId = mod (forkId + 1) philCount
 
 initialState philId
-  | philId == 0 = initialThreadState (initialFork philId) (initialFork (nextForkId philId))
+  | philId == 0 = initialThreadState (initialFork 0) (initialFork 1)
   | philId == 1 = initialThreadState Nothing Nothing
   | otherwise = initialThreadState (initialFork philId) Nothing
 
@@ -54,21 +54,21 @@ nextState philId name state @ ThreadState { state = philState, left = left, righ
   case msg of
       NextState Thinking -> do
         sendNextState delay Hungry inCh
-        putStrLn (name ++ "is thinking...")
-        return (state { state = Thinking })
+        putStrLn $ name ++ " is thinking..."
+        return state { state = Thinking }
       NextState Hungry -> do
-        putStrLn (name ++ "is hungry...")
-        return (state { state = Hungry })
+        putStrLn $ name ++ " is hungry..."
+        return state { state = Hungry }
       RequestToken n ->
-        return (
+        return $
           if n == philId
           then state { left = left { canRequest = True} }
-          else state { right = right { canRequest = True} })
+          else state { right = right { canRequest = True} }
       XmitFork (Fork n s) ->
-        return (
+        return $
           if n == philId
           then state { left = left { fork = Just (Fork n s)} }
-          else state { right = right { fork = Just (Fork n s)} })
+          else state { right = right { fork = Just (Fork n s)} }
 
 
 requestFork forkId outCh = do
@@ -94,30 +94,37 @@ forkId ForkRecord { fork = f, canRequest = _} =
     Nothing -> error "Getting id non-existent fork"
 
 actState philId name state @ ThreadState { state = philState, left = left, right = right } leftCh inCh rightCh
-  | philState == Hungry && (canRequest left) && (not $ hasFork left) =
+  | philState == Hungry && canRequest left && (not $ hasFork left) =
       do
         -- Request left fork
-        requestFork philId leftCh
+        let forkId = philId
+        requestFork forkId leftCh
         return state { left = left {canRequest = False} }
-  | philState == Hungry && (canRequest right) && (not $ hasFork right) =
+  | philState == Hungry && canRequest right && (not $ hasFork right) =
       do
         -- Request right fork
-        requestFork (nextForkId philId) rightCh
+        let forkId = nextForkId philId
+        requestFork forkId rightCh
         return state { right = right { canRequest = False} }
   | philState == Hungry && hasFork left && hasFork right =
       do
         -- Start eating!
         delay <- nextDelay
         sendNextState delay Thinking inCh
-        putStrLn (name ++ " is eating1")
-        return state { state = Eating }
+        putStrLn $ name ++ " is eating!"
+        return state {
+          state = Eating,
+          left = left { fork = Just (Fork philId Dirty)}, right = right { fork = Just (Fork (nextForkId philId) Dirty)}
+        }
   | philState /= Eating && hasFork left && canRequest left && dirty left =
       do
-        sendFork (fork left) leftCh
+        let f = fork left
+        sendFork f leftCh
         return state { left = left { fork = Nothing } }
   | philState /= Eating && hasFork right && canRequest right && dirty right =
       do
-        sendFork (fork right) rightCh
+        let f = fork right
+        sendFork f rightCh
         return state { right = right { fork = Nothing}}
   | otherwise = return state
 
