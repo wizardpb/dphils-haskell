@@ -16,6 +16,7 @@ data Fork = Fork Int ForkState deriving (Eq, Show)
 data ForkRecord = ForkRecord { fork :: Maybe Fork, canRequest :: Bool} deriving (Eq, Show)
 data ThreadState = ThreadState {
     state :: PhilState,
+    eatCount :: Int,
     left :: ForkRecord, right :: ForkRecord
   }
   deriving (Eq, Show)
@@ -41,6 +42,7 @@ initialFork forkId =
 initialThreadState :: Maybe Fork -> Maybe Fork -> ThreadState
 initialThreadState leftFork rightFork = ThreadState {
     state = Starting,
+    eatCount = 0,
     left = ForkRecord { fork = leftFork, canRequest = isNothing leftFork},
     right = ForkRecord { fork = rightFork, canRequest = isNothing rightFork}
   }
@@ -86,18 +88,21 @@ forkId forkRecord =
     Just (Fork n s) -> n
     Nothing -> error "Getting id non-existent fork"
 
+logState :: LogFunc -> Int -> String -> ThreadState -> IO ()
+logState logFunc philId name s = do
+  let stateStr = name ++ " is " ++ (show $ state s) ++ ", has eaten " ++ (show $ eatCount s) ++ " times"
+  logFunc philId stateStr
+
 runPhilosopher :: Int -> String -> (Chan Message, Chan Message, Chan Message) -> ThreadState -> LogFunc -> IO ()
-runPhilosopher philId name (leftCh, inCh, rightCh) state logger = do
+runPhilosopher philId name (leftCh, inCh, rightCh) state logFunc = do
   let nextState state @ ThreadState { state = philState, left = left, right = right} = do
         msg <- readChan inCh
         delay <- nextDelay
         case msg of
             NextState Thinking -> do
               sendNextState delay Hungry inCh
-              logger philId $ name ++ " is thinking..."
               return state { state = Thinking }
             NextState Hungry -> do
-              logger philId $ name ++ " is hungry..."
               return state { state = Hungry }
             RequestToken n ->
               return $
@@ -128,9 +133,9 @@ runPhilosopher philId name (leftCh, inCh, rightCh) state logger = do
               -- Start eating!
               delay <- nextDelay
               sendNextState delay Thinking inCh
-              logger philId $ name ++ " is eating!"
+              let incCount  = (eatCount state) + 1
               return state {
-                state = Eating,
+                state = Eating, eatCount = incCount,
                 left = left { fork = Just (Fork philId Dirty)}, right = right { fork = Just (Fork (nextForkId philId) Dirty)}
               }
         | philState /= Eating && hasFork left && forkRequested left && dirty left =
@@ -146,6 +151,7 @@ runPhilosopher philId name (leftCh, inCh, rightCh) state logger = do
         | otherwise = return state
 
       recurse state = do
+        logState logFunc philId name state
         ns <- nextState state
         as <- actState ns
         recurse as
