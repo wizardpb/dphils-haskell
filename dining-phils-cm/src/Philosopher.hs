@@ -8,6 +8,8 @@ import Data.Time.Clock.System
 import Data.Maybe
 import GHC.Int(Int64)
 
+import Logger(LogFunc)
+
 data PhilState = Starting | Thinking | Hungry | Eating deriving (Eq,Show)
 data ForkState = Dirty | Clean deriving (Eq, Show)
 data Fork = Fork Int ForkState deriving (Eq, Show)
@@ -25,111 +27,66 @@ philCount = length philosophers
 philIds = [0..philCount-1]
 
 nextDelay :: IO Int
-nextDelay = randomRIO (5,30)
+nextDelay = randomRIO (15,30)
 
 sendNextState :: Int -> PhilState -> Chan Message -> IO ThreadId
 sendNextState secs nextState ch = forkIO $ do
   threadDelay (secs * 100000)
   writeChan ch $ NextState nextState
 
+initialFork :: Int -> Maybe Fork
 initialFork forkId =
   Just (Fork forkId Dirty)
 
+initialThreadState :: Maybe Fork -> Maybe Fork -> ThreadState
 initialThreadState leftFork rightFork = ThreadState {
     state = Starting,
     left = ForkRecord { fork = leftFork, canRequest = isNothing leftFork},
     right = ForkRecord { fork = rightFork, canRequest = isNothing rightFork}
   }
 
+nextForkId :: Int-> Int
 nextForkId forkId = mod (forkId + 1) philCount
 
+initialState :: Int -> ThreadState
 initialState philId
   | philId == 0 = initialThreadState (initialFork 0) (initialFork 1)
   | philId == 1 = initialThreadState Nothing Nothing
   | otherwise = initialThreadState (initialFork philId) Nothing
 
---nextState philId name state @ ThreadState { state = philState, left = left, right = right} inCh = do
---  msg <- readChan inCh
---  delay <- nextDelay
---  case msg of
---      NextState Thinking -> do
---        sendNextState delay Hungry inCh
---        putStrLn $ name ++ " is thinking..."
---        return state { state = Thinking }
---      NextState Hungry -> do
---        putStrLn $ name ++ " is hungry..."
---        return state { state = Hungry }
---      RequestToken n ->
---        return $
---          if n == philId
---          then state { left = left { canRequest = True} }
---          else state { right = right { canRequest = True} }
---      XmitFork (Fork n s) ->
---        return $
---          if n == philId
---          then state { left = left { fork = Just (Fork n s)} }
---          else state { right = right { fork = Just (Fork n s)} }
-
-
+requestFork :: Int -> Chan Message -> IO ()
 requestFork forkId outCh = do
   writeChan outCh $ RequestToken forkId
   return ()
 
+sendFork :: Maybe Fork -> Chan Message -> IO ()
 sendFork maybeFork outCh = do
   case maybeFork of
     Just (Fork n _) -> writeChan outCh $ XmitFork (Fork n Clean)
     Nothing -> error "Sending non-existent fork"
   return ()
 
-hasFork ForkRecord { fork = fork, canRequest = _} = isJust fork
+hasFork :: ForkRecord -> Bool
+hasFork forkRecord =
+  isJust $ fork forkRecord
 
-dirty ForkRecord { fork = f, canRequest = _} =
-  case f of
+forkRequested :: ForkRecord -> Bool
+forkRequested forkRecord =
+  canRequest forkRecord
+
+dirty :: ForkRecord -> Bool
+dirty forkRecord =
+  case fork forkRecord of
     Just (Fork n s) -> s == Dirty
     Nothing -> error "Testing non-existent fork dirty"
 
-forkId ForkRecord { fork = f, canRequest = _} =
-  case f of
+forkId :: ForkRecord -> Int
+forkId forkRecord =
+  case fork forkRecord of
     Just (Fork n s) -> n
     Nothing -> error "Getting id non-existent fork"
 
---actState philId name state @ ThreadState { state = philState, left = left, right = right } leftCh inCh rightCh
---  | philState == Hungry && canRequest left && (not $ hasFork left) =
---      do
---        -- Request left fork
---        let forkId = philId
---        requestFork forkId leftCh
---        return state { left = left {canRequest = False} }
---  | philState == Hungry && canRequest right && (not $ hasFork right) =
---      do
---        -- Request right fork
---        let forkId = nextForkId philId
---        requestFork forkId rightCh
---        return state { right = right { canRequest = False} }
---  | philState == Hungry && hasFork left && hasFork right =
---      do
---        -- Start eating!
---        delay <- nextDelay
---        sendNextState delay Thinking inCh
---        putStrLn $ name ++ " is eating!"
---        return state {
---          state = Eating,
---          left = left { fork = Just (Fork philId Dirty)}, right = right { fork = Just (Fork (nextForkId philId) Dirty)}
---        }
---  | philState /= Eating && hasFork left && canRequest left && dirty left =
---      do
---        let f = fork left
---        sendFork f leftCh
---        return state { left = left { fork = Nothing } }
---  | philState /= Eating && hasFork right && canRequest right && dirty right =
---      do
---        let f = fork right
---        sendFork f rightCh
---        return state { right = right { fork = Nothing}}
---  | otherwise = return state
-
-
-runPhilosopher :: Int -> String -> (Chan Message, Chan Message, Chan Message) -> ThreadState -> (Int -> String -> IO ()) -> IO ()
+runPhilosopher :: Int -> String -> (Chan Message, Chan Message, Chan Message) -> ThreadState -> LogFunc -> IO ()
 runPhilosopher philId name (leftCh, inCh, rightCh) state logger = do
   let nextState state @ ThreadState { state = philState, left = left, right = right} = do
         msg <- readChan inCh
@@ -176,12 +133,12 @@ runPhilosopher philId name (leftCh, inCh, rightCh) state logger = do
                 state = Eating,
                 left = left { fork = Just (Fork philId Dirty)}, right = right { fork = Just (Fork (nextForkId philId) Dirty)}
               }
-        | philState /= Eating && hasFork left && canRequest left && dirty left =
+        | philState /= Eating && hasFork left && forkRequested left && dirty left =
             do
               let f = fork left
               sendFork f leftCh
               return state { left = left { fork = Nothing } }
-        | philState /= Eating && hasFork right && canRequest right && dirty right =
+        | philState /= Eating && hasFork right && forkRequested right && dirty right =
             do
               let f = fork right
               sendFork f rightCh
@@ -189,12 +146,11 @@ runPhilosopher philId name (leftCh, inCh, rightCh) state logger = do
         | otherwise = return state
 
       recurse state = do
---        logger philId $ name ++ ": state=" ++ (show state)
         ns <- nextState state
---        logger philId $ name ++ ": ns=" ++ (show ns)
         as <- actState ns
         recurse as
 
   recurse state
 
+startPhil :: Chan Message -> IO ()
 startPhil ch = writeChan ch $ NextState Thinking
