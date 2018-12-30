@@ -14,6 +14,7 @@ data PhilState = Starting | Thinking | Hungry | Eating deriving (Eq,Show)
 data ForkState = Dirty | Clean deriving (Eq, Show)
 data Fork = Fork Int ForkState deriving (Eq, Show)
 data ForkRecord = ForkRecord { fork :: Maybe Fork, canRequest :: Bool} deriving (Eq, Show)
+
 data ThreadState = ThreadState {
     state :: PhilState,
     eatCount :: Int, eatTime :: Int,
